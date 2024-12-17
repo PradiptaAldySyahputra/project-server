@@ -230,7 +230,7 @@ app.get('/api/get-user', function(req, res) {
 });
 
 app.post('/api/add-user', upload.single('image'), function(req, res) {
-    const { name, email, password, role, phone } = req.body;
+    const { name, email, password, role, phone, team_id } = req.body;
 
     let filePath = null;
     if (req.file) {
@@ -244,8 +244,8 @@ app.post('/api/add-user', upload.single('image'), function(req, res) {
                 "data": null
             });
         }
-        const queryStr = "INSERT INTO user (name, email, password, role, phone, image) VALUES (?, ?, ?, ?, ?, ?)";
-        const values = [name, email, hashedPassword, role, phone, filePath];
+        const queryStr = "INSERT INTO user (name, email, password, role, phone, team_id, image) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        const values = [name, email, hashedPassword, role, phone, team_id, filePath];
         
         conn.query(queryStr, values, (err, results) => {
             if (err) {
@@ -268,15 +268,15 @@ app.post('/api/add-user', upload.single('image'), function(req, res) {
 });
 
 app.post('/api/update-user', upload.single('imageUpdate'), function(req, res) {
-    const { name, email, role, phone, user_id } = req.body;
+    const { name, email, role, phone, user_id, team_id } = req.body;
 
     let filePath = null;
     if (req.file) {
         filePath = '/uploads/' + req.file.filename;
     }
 
-    let queryStr = "UPDATE user SET name = ?, email = ?, phone = ?, role = ?";
-    let values = [name, email, phone, role];
+    let queryStr = "UPDATE user SET name = ?, email = ?, phone = ?, role = ?, team_id = ?";
+    let values = [name, email, phone, role, team_id];
 
     if (filePath != null) {
         queryStr += ", image = ?";
@@ -409,7 +409,30 @@ app.post('/api/add-ticket', function(req, res) {
 
 // ======================== API SURVEY =======================
 app.get('/api/get-survey', function(req, res) {
-    const queryStr = "SELECT * FROM survey WHERE deleted_at IS NULL";
+    limit = req.query.limit;
+    offset = req.query.offset;
+    search = req.query.search;
+    survey_id = req.query.survey_id;
+    
+    let queryStr;
+
+    if (survey_id != null) {
+        queryStr = "SELECT id, title, project, description, DATE_FORMAT(survey_date, '%d %b %Y') AS survey_date FROM survey WHERE id = " + survey_id;
+    } else {
+        queryStr = "SELECT id, title, project, description, DATE_FORMAT(survey_date, '%d %b %Y') AS survey_date FROM survey WHERE deleted_at IS NULL";
+        
+        if (search) {
+            queryStr += ` AND LOWER(title) LIKE LOWER('%${search}%')`;
+        }
+        
+        if (limit) {
+            queryStr += " LIMIT " + limit;
+        }
+        if (offset) {
+            queryStr += " OFFSET " + offset;
+        }
+    }
+
     conn.query(queryStr, (err, results) => {
         if (err) {
             console.log(err);
@@ -428,9 +451,175 @@ app.get('/api/get-survey', function(req, res) {
     });
 });
 
+
+app.get('/api/get-survey-images', function(req, res) {
+    survey_id = req.query.survey_id;
+    let queryStr = "SELECT * FROM survey_images WHERE survey_id = " + survey_id;
+    conn.query(queryStr, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed",
+                "data": null
+            });
+        } else {
+            console.log("resulstt -->", results)
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully retrieved survey images",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/add-survey', upload.array('surveyImages', 10), (req, res) => {
+    const { title, project, description, survey_date } = req.body;
+
+    // Log untuk memastikan data yang diterima
+    console.log("======masuk kesini");
+    console.log(title, project, description, survey_date);
+
+    conn.beginTransaction((err) => {
+        if (err) {
+        return res.status(500).json({
+            success: false,
+            message: "Error starting transaction",
+            data: null
+        });
+        }
+
+        const queryStr = "INSERT INTO survey (title, project, description, survey_date) VALUES (?, ?, ?, ?)";
+        const values = [title, project, description, survey_date];
+
+        conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            return conn.rollback(() => {
+                res.status(500).json({
+                    success: false,
+                    message: "Error inserting survey",
+                    data: null
+                });
+            });
+        }
+
+        const surveyId = results.insertId;
+
+        if (req.files && req.files.length > 0) {
+            const fileQueries = req.files.map((file) => {
+            return new Promise((resolve, reject) => {
+                const imagePath = '/uploads/' + file.filename;
+                const insertImageQuery = "INSERT INTO survey_images (survey_id, image) VALUES (?, ?)";
+                const imageValues = [surveyId, imagePath];
+
+                conn.query(insertImageQuery, imageValues, (err, imageResults) => {
+                if (err) {
+                    console.log(err);
+                    return reject(err);
+                }
+                resolve(imageResults);
+                });
+            });
+            });
+
+            Promise.all(fileQueries)
+            .then(() => {
+                conn.commit((err) => {
+                if (err) {
+                    console.log(err);
+                    return conn.rollback(() => {
+                    res.status(500).json({
+                        success: false,
+                        message: "Error committing transaction",
+                        data: null
+                    });
+                    });
+                }
+
+                res.status(200).json({
+                    success: true,
+                    message: "Survey and images added successfully",
+                    data: results
+                });
+                });
+            })
+            .catch((err) => {
+                console.log(err);
+                conn.rollback(() => {
+                res.status(500).json({
+                    success: false,
+                    message: "Error inserting images",
+                    data: null
+                });
+                });
+            });
+        } else {
+            conn.commit((err) => {
+            if (err) {
+                console.log(err);
+                return conn.rollback(() => {
+                res.status(500).json({
+                    success: false,
+                    message: "Error committing transaction",
+                    data: null
+                });
+                });
+            }
+
+            res.status(200).json({
+                success: true,
+                message: "Survey added successfully without images",
+                data: results
+            });
+            });
+        }
+        });
+    });
+});
+
+app.post('/api/delete-survey', function(req, res){
+    const param = req.body;
+    const id = param.id;
+    const now = new Date(); 
+
+    const queryStr = "UPDATE survey SET deleted_at = ? WHERE id = ?";
+    const values = [now, id];
+    conn.query(queryStr, values, (err, results) => {
+        if(err){
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message" : "Failed",
+                "data" : null
+            });
+        }else{
+            res.status(200).json({
+                "success": true,
+                "message" : "Berhasil menghapus data",
+                "data" : results
+            })
+        }
+    })
+});
+
 // ======================== API TECHNICIAN TEAM =======================
 app.get('/api/get-technician-team', function(req, res) {
-    const queryStr = "SELECT * FROM technician_team WHERE deleted_at IS NULL";
+    limit = req.query.limit;
+    offset = req.query.offset;
+    search = req.query.search;
+    let queryStr = "SELECT * FROM technician_team WHERE deleted_at IS NULL";
+    if (search){
+        queryStr += ` AND LOWER(name) LIKE LOWER('%${search}%')`;
+    }
+    queryStr += " ORDER BY name ASC";
+    if (limit){
+        queryStr += " LIMIT " + limit;
+    }
+    if (offset){
+        queryStr += " OFFSET " + offset;
+    }
     conn.query(queryStr, (err, results) => {
         if (err) {
             console.log(err);
@@ -443,6 +632,143 @@ app.get('/api/get-technician-team', function(req, res) {
             res.status(200).json({
                 "success": true,
                 "message": "Successfully retrieved technician team",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/add-technician-team', upload.single('imageTechnicianTeam'), function(req, res) {
+    const { name } = req.body;
+
+    let filePath = null;
+    if (req.file) {
+        filePath = '/uploads/' + req.file.filename;
+    }
+
+    const queryStr = "INSERT INTO technician_team (name, image) VALUES (?, ?)";
+    const values = [name, filePath];
+    
+    conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Berhasil menambahkan data tim teknisi",
+                "data": results
+            });
+        }
+    });
+
+});
+
+app.post('/api/update-technician-team', upload.single('imageUpdateTechnicianTeam'), function(req, res) {
+    const { name, team_id } = req.body;
+
+    let filePath = null;
+    if (req.file) {
+        filePath = '/uploads/' + req.file.filename;
+    }
+
+    let queryStr = "UPDATE technician_team SET name = ?";
+    let values = [name];
+
+    if (filePath != null) {
+        queryStr += ", image = ?";
+        values.push(filePath); 
+    }
+
+    queryStr += " WHERE id = ?";
+    values.push(team_id); 
+    
+    conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Internal Server Error",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Berhasil mengubah data tim teknisi",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/delete-technician-team', function(req, res){
+    const param = req.body;
+    const id = param.id;
+    const now = new Date(); 
+
+    const queryStr = "UPDATE technician_team SET deleted_at = ? WHERE id = ?";
+    const values = [now, id];
+    conn.query(queryStr, values, (err, results) => {
+        if(err){
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message" : "Failed",
+                "data" : null
+            });
+        }else{
+            res.status(200).json({
+                "success": true,
+                "message" : "Berhasil menghapus data",
+                "data" : results
+            })
+        }
+    })
+});
+
+app.get('/api/get-technician', function(req, res) {
+    console.log("called here\n\n")
+    limit = req.query.limit;
+    offset = req.query.offset;
+    search = req.query.search;
+    user_id = req.query.user_id;
+    let queryStr;
+    if (user_id != null){
+        queryStr = "SELECT u.*, tt.name AS team FROM user AS u LEFT JOIN technician_team AS tt ON u.team_id = tt.id WHERE u.role = 'technician' AND u.id = " + user_id;
+    }else{
+        queryStr = "SELECT u.*, tt.name AS team FROM user AS u LEFT JOIN technician_team AS tt ON u.team_id = tt.id WHERE u.role = 'technician' AND u.deleted_at IS NULL";
+        if (search){
+            queryStr += `
+            AND (
+                LOWER(u.name) LIKE LOWER('%${search}%') 
+                OR LOWER(u.phone) LIKE LOWER('%${search}%')
+                OR LOWER(u.email) LIKE LOWER('%${search}%')
+            )`;
+        }
+        if (limit){
+            queryStr += " LIMIT " + limit;
+        }
+        if (offset){
+            queryStr += " OFFSET " + offset;
+        }
+    }
+    conn.query(queryStr, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed",
+                "data": null
+            });
+        } else {
+            console.log(results);
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully retrieved users",
                 "data": results
             });
         }

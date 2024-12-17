@@ -1,14 +1,17 @@
-const mysql = require('mysql');
-const conn = mysql.createPool({
+const mysql = require('mysql2');
+const conn = mysql.createConnection({
     host: 'localhost',
     user: 'root',
     password: '',
     database: 'pbl_308'
-})
+});
 
-conn.getConnection((err) =>{
-    if(err) throw err;
-    console.log('DB Connected');
-})
+conn.connect((err) => {
+    if (err) {
+      console.error('Error connecting to the database:', err.stack);
+      return;
+    }
+    console.log('DB Connected as ID ' + conn.threadId);
+});
 
 module.exports = conn;

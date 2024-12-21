@@ -7,6 +7,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const saltRounds = 10;
 const conn = require('./config/db');
+const { format } = require('date-fns');
 
 const app = express();
 
@@ -81,6 +82,7 @@ app.post('/api/register', function(req, res) {
 
 // ======================== SERVER LOGIN =======================
 app.post('/api/login', function(req, res) {
+    console.log("kepanggil");
     const { email, password } = req.body;
 
     // Validasi input
@@ -187,6 +189,7 @@ app.get('/api/user/:id', function(req, res) {
 
 // ======================== API USER =========================
 app.get('/api/get-user', function(req, res) {
+    console.log("get user============")
     limit = req.query.limit;
     offset = req.query.offset;
     search = req.query.search;
@@ -364,7 +367,42 @@ app.post('/api/change-password', (req, res) => {
 
 // ======================== API TICKET =======================
 app.get('/api/get-ticket', function(req, res) {
-    const queryStr = "SELECT * FROM ticket WHERE deleted_at IS NULL";
+    limit = req.query.limit;
+    offset = req.query.offset;
+    search = req.query.search;
+    startDate = req.query.startDate;
+    endDate = req.query.endDate;
+    state = req.query.state;
+    applyFilter = req.query.applyFilter;
+    ticket_id = req.query.ticket_id;
+
+    let queryStr;
+    if (ticket_id != null){
+        queryStr = "SELECT id, title, description, state, DATE_FORMAT(created_at, '%d %b %Y %H:%i') AS created_at FROM ticket WHERE id = " + user_id;
+    }else{
+        queryStr = "SELECT id, title, description, state, DATE_FORMAT(created_at, '%d %b %Y %H:%i') AS created_at FROM ticket WHERE deleted_at IS NULL";
+        if (search){
+            queryStr += ` AND LOWER(title) LIKE LOWER('%${search}%') `;
+        }
+
+        if (applyFilter != 'false' && startDate) {
+            queryStr += ` AND created_at >= '${format(new Date(startDate), 'yyyy-MM-dd 00:00:00')}'`;
+        }
+
+        if (applyFilter != 'false' && endDate) {
+            queryStr += ` AND created_at <= '${format(new Date(endDate), 'yyyy-MM-dd 23:59:59')}'`;
+        }
+        if (applyFilter != 'false' && state != 'all') {
+            queryStr += ` AND state = '${state}'`;
+        }
+
+        if (limit){
+            queryStr += " LIMIT " + limit;
+        }
+        if (offset){
+            queryStr += " OFFSET " + offset;
+        }
+    }
     conn.query(queryStr, (err, results) => {
         if (err) {
             console.log(err);
@@ -384,10 +422,10 @@ app.get('/api/get-ticket', function(req, res) {
 });
 
 app.post('/api/add-ticket', function(req, res) {
-    const { name, email, password } = req.body;
+    const { title, description } = req.body;
 
-    const queryStr = "INSERT INTO ticket (name, email, password) VALUES (?, ?, ?)";
-    const values = [name, email, password];
+    const queryStr = "INSERT INTO ticket (title, description) VALUES (?, ?)";
+    const values = [title, description];
 
     conn.query(queryStr, values, (err, results) => {
         if (err) {
@@ -407,11 +445,40 @@ app.post('/api/add-ticket', function(req, res) {
     });
 });
 
+app.post('/api/delete-ticket', function(req, res){
+    const param = req.body;
+    const id = param.id;
+    const now = new Date(); 
+
+    const queryStr = "UPDATE ticket SET deleted_at = ? WHERE id = ?";
+    const values = [now, id];
+    conn.query(queryStr, values, (err, results) => {
+        if(err){
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message" : "Failed",
+                "data" : null
+            });
+        }else{
+            res.status(200).json({
+                "success": true,
+                "message" : "Berhasil menghapus data",
+                "data" : results
+            })
+        }
+    })
+});
+
 // ======================== API SURVEY =======================
 app.get('/api/get-survey', function(req, res) {
     limit = req.query.limit;
     offset = req.query.offset;
     search = req.query.search;
+    startDate = req.query.startDate;
+    endDate = req.query.endDate;
+    state = req.query.state;
+    applyFilter = req.query.applyFilter;
     survey_id = req.query.survey_id;
     
     let queryStr;
@@ -423,6 +490,17 @@ app.get('/api/get-survey', function(req, res) {
         
         if (search) {
             queryStr += ` AND LOWER(title) LIKE LOWER('%${search}%')`;
+        }
+
+        if (applyFilter != 'false' && startDate) {
+            queryStr += ` AND survey_date >= '${format(new Date(startDate), 'yyyy-MM-dd HH:mm:ss')}'`;
+        }
+
+        if (applyFilter != 'false' && endDate) {
+            queryStr += ` AND survey_date <= '${format(new Date(endDate), 'yyyy-MM-dd HH:mm:ss')}'`;
+        }
+        if (applyFilter != 'false' && state != 'all') {
+            queryStr += ` AND state = '${state}'`;
         }
         
         if (limit) {
@@ -450,7 +528,6 @@ app.get('/api/get-survey', function(req, res) {
         }
     });
 });
-
 
 app.get('/api/get-survey-images', function(req, res) {
     survey_id = req.query.survey_id;
@@ -575,6 +652,153 @@ app.post('/api/add-survey', upload.array('surveyImages', 10), (req, res) => {
             });
             });
         }
+        });
+    });
+});
+
+app.post('/api/update-survey', upload.array('surveyUpdateImages', 10), (req, res) => {
+    const { survey_id, title, project, description, survey_date, existed_images } = req.body;
+
+    console.log(title, project, description, survey_date);
+    console.log(existed_images);
+
+    conn.beginTransaction((err) => {
+        if (err) {
+            return res.status(500).json({
+                success: false,
+                message: "Error starting transaction",
+                data: null
+            });
+        }
+
+        // Step 1: Update survey data
+        const queryStr = "UPDATE survey SET title = ?, project = ?, description = ?, survey_date = ? WHERE id = ?";
+        const values = [title, project, description, survey_date, survey_id];
+
+        conn.query(queryStr, values, (err, results) => {
+            if (err) {
+                console.log(err);
+                return conn.rollback(() => {
+                    res.status(500).json({
+                        success: false,
+                        message: "Error updating survey",
+                        data: null
+                    });
+                });
+            }
+
+            // Step 2: Get all images for the current survey_id
+            const getImagesQuery = "SELECT id FROM survey_images WHERE survey_id = ?";
+            conn.query(getImagesQuery, [survey_id], (err, existingImages) => {
+                if (err) {
+                    console.log(err);
+                    return conn.rollback(() => {
+                        res.status(500).json({
+                            success: false,
+                            message: "Error fetching existing images",
+                            data: null
+                        });
+                    });
+                }
+
+                const existedImageIds = Array.isArray(existed_images) 
+                    ? existed_images.map(image => image.id) 
+                    : [];
+
+                const imagesToDelete = existingImages.filter(image => {
+                    return !existedImageIds.includes(image.id.toString()); 
+                });
+
+
+                if (imagesToDelete.length > 0) {
+                    const imageIdsToDelete = imagesToDelete.map(image => image.id);
+                    const deleteImagesQuery = "DELETE FROM survey_images WHERE survey_id = ? AND id IN (?)";
+                    conn.query(deleteImagesQuery, [survey_id, imageIdsToDelete], (err, deleteResults) => {
+                        if (err) {
+                            console.log(err);
+                            return conn.rollback(() => {
+                                res.status(500).json({
+                                    success: false,
+                                    message: "Error deleting images",
+                                    data: null
+                                });
+                            });
+                        }
+
+                        console.log(`Deleted ${deleteResults.affectedRows} image(s).`);
+                    });
+                }
+
+                // Step 4: Insert new images if provided
+                if (req.files && req.files.length > 0) {
+                    const fileQueries = req.files.map((file) => {
+                        return new Promise((resolve, reject) => {
+                            const imagePath = '/uploads/' + file.filename;
+                            const insertImageQuery = "INSERT INTO survey_images (survey_id, image) VALUES (?, ?)";
+                            const imageValues = [survey_id, imagePath];
+
+                            conn.query(insertImageQuery, imageValues, (err, imageResults) => {
+                                if (err) {
+                                    console.log(err);
+                                    return reject(err);
+                                }
+                                resolve(imageResults);
+                            });
+                        });
+                    });
+
+                    Promise.all(fileQueries)
+                        .then(() => {
+                            conn.commit((err) => {
+                                if (err) {
+                                    console.log(err);
+                                    return conn.rollback(() => {
+                                        res.status(500).json({
+                                            success: false,
+                                            message: "Error committing transaction",
+                                            data: null
+                                        });
+                                    });
+                                }
+
+                                res.status(200).json({
+                                    success: true,
+                                    message: "Survey and images updated successfully",
+                                    data: results
+                                });
+                            });
+                        })
+                        .catch((err) => {
+                            console.log(err);
+                            conn.rollback(() => {
+                                res.status(500).json({
+                                    success: false,
+                                    message: "Error inserting images",
+                                    data: null
+                                });
+                            });
+                        });
+                } else {
+                    conn.commit((err) => {
+                        if (err) {
+                            console.log(err);
+                            return conn.rollback(() => {
+                                res.status(500).json({
+                                    success: false,
+                                    message: "Error committing transaction",
+                                    data: null
+                                });
+                            });
+                        }
+
+                        res.status(200).json({
+                            success: true,
+                            message: "Survey updated successfully without new images",
+                            data: results
+                        });
+                    });
+                }
+            });
         });
     });
 });

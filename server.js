@@ -248,7 +248,7 @@ app.post('/api/add-user', upload.single('image'), function(req, res) {
             });
         }
         const queryStr = "INSERT INTO user (name, email, password, role, phone, team_id, image) VALUES (?, ?, ?, ?, ?, ?, ?)";
-        const values = [name, email, hashedPassword, role, phone, team_id, filePath];
+        const values = [name, email, hashedPassword, role, phone, team_id || null, filePath];
         
         conn.query(queryStr, values, (err, results) => {
             if (err) {
@@ -279,7 +279,7 @@ app.post('/api/update-user', upload.single('imageUpdate'), function(req, res) {
     }
 
     let queryStr = "UPDATE user SET name = ?, email = ?, phone = ?, role = ?, team_id = ?";
-    let values = [name, email, phone, role, team_id];
+    let values = [name, email, phone, role, team_id || null];
 
     if (filePath != null) {
         queryStr += ", image = ?";
@@ -378,22 +378,22 @@ app.get('/api/get-ticket', function(req, res) {
 
     let queryStr;
     if (ticket_id != null){
-        queryStr = "SELECT id, title, description, state, DATE_FORMAT(created_at, '%d %b %Y %H:%i') AS created_at FROM ticket WHERE id = " + user_id;
+        queryStr = "SELECT t.id, t.title, t.description, t.state, u.name AS technician_name, DATE_FORMAT(t.created_at, '%d %b %Y %H:%i') AS created_at FROM ticket AS t LEFT JOIN user AS u ON u.id = t.technician_id WHERE t.id = " + ticket_id;
     }else{
-        queryStr = "SELECT id, title, description, state, DATE_FORMAT(created_at, '%d %b %Y %H:%i') AS created_at FROM ticket WHERE deleted_at IS NULL";
+        queryStr = "SELECT t.id, t.title, t.description, t.state, u.name AS technician_name, DATE_FORMAT(t.created_at, '%d %b %Y %H:%i') AS created_at FROM ticket AS t LEFT JOIN user AS u ON u.id = t.technician_id WHERE t.deleted_at IS NULL";
         if (search){
             queryStr += ` AND LOWER(title) LIKE LOWER('%${search}%') `;
         }
 
         if (applyFilter != 'false' && startDate) {
-            queryStr += ` AND created_at >= '${format(new Date(startDate), 'yyyy-MM-dd 00:00:00')}'`;
+            queryStr += ` AND t.created_at >= '${format(new Date(startDate), 'yyyy-MM-dd 00:00:00')}'`;
         }
 
         if (applyFilter != 'false' && endDate) {
-            queryStr += ` AND created_at <= '${format(new Date(endDate), 'yyyy-MM-dd 23:59:59')}'`;
+            queryStr += ` AND t.created_at <= '${format(new Date(endDate), 'yyyy-MM-dd 23:59:59')}'`;
         }
         if (applyFilter != 'false' && state != 'all') {
-            queryStr += ` AND state = '${state}'`;
+            queryStr += ` AND t.state = '${state}'`;
         }
 
         if (limit){
@@ -468,6 +468,58 @@ app.post('/api/delete-ticket', function(req, res){
             })
         }
     })
+});
+
+app.post('/api/assign-ticket', function(req, res){
+    const param = req.body;
+    const ticket_id = param.ticket_id;
+    const technician_id = param.technician_id;
+    console.log("assign tect")
+    console.log(ticket_id);
+    console.log(technician_id);
+
+    const queryStr = "UPDATE ticket SET technician_id = ?, state='in_progress' WHERE id = ?";
+    const values = [technician_id, ticket_id];
+    conn.query(queryStr, values, (err, results) => {
+        if(err){
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message" : "Failed",
+                "data" : null
+            });
+        }else{
+            res.status(200).json({
+                "success": true,
+                "message" : "Berhasil mengubah data",
+                "data" : results
+            })
+        }
+    })
+});
+
+app.post('/api/update-ticket', function(req, res) {
+    const { title, description, ticket_id } = req.body;
+
+    const queryStr = "UPDATE ticket SET title = ? , description = ? WHERE id = ?";
+    const values = [title, description, ticket_id];
+
+    conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed to update ticket",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully update new ticket",
+                "data": results
+            });
+        }
+    });
 });
 
 // ======================== API SURVEY =======================
@@ -997,6 +1049,138 @@ app.get('/api/get-technician', function(req, res) {
             });
         }
     });
+});
+
+
+// ======================== API PROJECT =======================
+app.get('/api/get-project', function(req, res) {
+    limit = req.query.limit;
+    offset = req.query.offset;
+    search = req.query.search;
+    project_id = req.query.project_id;
+
+    let queryStr;
+    if (project_id != null){
+        queryStr = "SELECT p.id, p.name, p.company, p.company_address, p.source_service, u.name AS technician_name, DATE_FORMAT(p.project_date, '%d %b %Y') AS project_date FROM project AS p LEFT JOIN user AS u ON u.id = p.user_id WHERE p.id = " + project_id;
+    }else{
+        queryStr = "SELECT p.id, p.name, p.company, p.company_address, p.source_service, u.name AS technician_name, DATE_FORMAT(p.project_date, '%d %b %Y') AS project_date FROM project AS p LEFT JOIN user AS u ON u.id = p.user_id WHERE p.deleted_at IS NULL";
+        if (search){
+            queryStr += `
+            AND (
+                LOWER(p.name) LIKE LOWER('%${search}%') 
+                OR LOWER(p.company) LIKE LOWER('%${search}%')
+                OR LOWER(p.company_address) LIKE LOWER('%${search}%')
+                OR LOWER(p.source_service) LIKE LOWER('%${search}%')
+            )`;
+        }
+
+        if (limit){
+            queryStr += " LIMIT " + limit;
+        }
+        if (offset){
+            queryStr += " OFFSET " + offset;
+        }
+    }
+    conn.query(queryStr, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully retrieved tickets",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/add-project', function(req, res) {
+    const param = req.body;
+    const name = param.name;
+    const company = param.company;
+    const company_address = param.company_address;
+    const source_service = param.source_service;
+    const project_date = param.project_date;
+
+    const queryStr = "INSERT INTO project (name, company, company_address, source_service, project_date ) VALUES (?, ?, ?, ?, ?)";
+    const values = [name, company, company_address, source_service, project_date];
+
+    conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed to add new project",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully added new project",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/update-project', function(req, res) {
+    const param = req.body;
+    const name = param.name;
+    const company = param.company;
+    const company_address = param.company_address;
+    const source_service = param.source_service;
+    const project_date = param.project_date;
+    const project_id = param.project_id;
+
+    const queryStr = "UPDATE project SET name = ?, company = ?, company_address = ?, source_service = ?, project_date = ? WHERE id = ?";
+    const values = [name, company, company_address, source_service, project_date, project_id];
+
+    conn.query(queryStr, values, (err, results) => {
+        if (err) {
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message": "Failed to update project",
+                "data": null
+            });
+        } else {
+            res.status(200).json({
+                "success": true,
+                "message": "Successfully update project",
+                "data": results
+            });
+        }
+    });
+});
+
+app.post('/api/delete-project', function(req, res){
+    const param = req.body;
+    const id = param.id;
+    const now = new Date(); 
+
+    const queryStr = "UPDATE project SET deleted_at = ? WHERE id = ?";
+    const values = [now, id];
+    conn.query(queryStr, values, (err, results) => {
+        if(err){
+            console.log(err);
+            res.status(500).json({
+                "success": false,
+                "message" : "Failed",
+                "data" : null
+            });
+        }else{
+            res.status(200).json({
+                "success": true,
+                "message" : "Berhasil menghapus data",
+                "data" : results
+            })
+        }
+    })
 });
 
 // ======================== SERVER START =======================
